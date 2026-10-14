@@ -1,4 +1,6 @@
 import { ErrorMapper } from "utils/ErrorMapper";
+import { spawner } from "managers/spawnManager";
+import { runHarvester } from "roles/harvester";
 
 declare global {
   /*
@@ -13,12 +15,14 @@ declare global {
   interface Memory {
     uuid: number;
     log: any;
+    bootstrap: boolean;
   }
 
   interface CreepMemory {
     role: string;
     room: string;
     working: boolean;
+    source: Id<Source>;
   }
 
 }
@@ -38,4 +42,17 @@ export const loop = ErrorMapper.wrapLoop(() => {
       delete Memory.creeps[name];
     }
   }
+
+  const extensions = Object.values(Game.structures).filter(s => s.structureType === STRUCTURE_EXTENSION);
+
+  Memory.bootstrap = extensions.length < 5;
+
+  spawner();
+
+  for (const creep of Object.values(Game.creeps)) {
+    if (creep.memory.role === "harvester") {
+      runHarvester(creep);
+    }
+  }
+
 });
