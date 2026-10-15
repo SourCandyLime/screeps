@@ -16,6 +16,10 @@ declare global {
     uuid: number;
     log: any;
     bootstrap: boolean;
+    targetCounts: Record<string, number>;
+    templates: Record<string, Record<number, BodyPartConstant[]>>
+    room: Room;
+    spawn: string;
   }
 
   interface CreepMemory {
@@ -36,6 +40,22 @@ declare const global: {
 export const loop = ErrorMapper.wrapLoop(() => {
   console.log(`Current game tick is ${Game.time}`);
 
+  Memory.targetCounts = {
+    HARV: 1,
+    UP: 0,
+    BOB: 0,
+    HAUL: 0,
+  }
+
+  Memory.templates = {
+    HARV: {
+      0: [MOVE, CARRY, WORK]
+    }
+  }
+
+  Memory.room = Game.rooms["E3S4"]
+  Memory.spawn = "S.1"
+
   // Automatically delete memory of missing creeps
   for (const name in Memory.creeps) {
     if (!(name in Game.creeps)) {
@@ -45,12 +65,12 @@ export const loop = ErrorMapper.wrapLoop(() => {
 
   const extensions = Object.values(Game.structures).filter(s => s.structureType === STRUCTURE_EXTENSION);
 
-  Memory.bootstrap = extensions.length < 5;
+  Memory.bootstrap = true;
 
   spawner();
 
   for (const creep of Object.values(Game.creeps)) {
-    if (creep.memory.role === "harvester") {
+    if (creep.memory.role === "HARV") {
       runHarvester(creep);
     }
   }

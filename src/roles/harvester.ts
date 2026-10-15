@@ -1,6 +1,15 @@
+// roles/harvester.ts
+
 import { move } from "managers/moveManager"
+import { getSource } from "managers/sourceManager";
 
 export function runHarvester(creep: Creep): void {
+  if (!creep.memory.source) {
+    creep.memory.source = getSource(creep);
+  }
+
+  if (!creep.memory.source) return;
+
   if (Memory.bootstrap) {
     bootstrap(creep);
   } else {
@@ -9,10 +18,12 @@ export function runHarvester(creep: Creep): void {
 }
 
 function bootstrap(creep: Creep): void {
-  if(creep.store.getFreeCapacity() > 0) {
-    const sources = creep.room.find(FIND_SOURCES);
-    if(creep.harvest(sources[0]) === ERR_NOT_IN_RANGE) {
-      move(creep, sources[0].pos, "#ff8800");
+  if (creep.store.getFreeCapacity() > 0) {
+    const source = Game.getObjectById(creep.memory.source);
+    if (source) {
+      if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+        move(creep, source.pos, "#ff8800");
+      }
     }
   } else {
     const targets = creep.room.find(FIND_STRUCTURES, {
@@ -32,16 +43,26 @@ function bootstrap(creep: Creep): void {
 }
 
 function nonBootstrap(creep: Creep): void {
-  const sources = creep.room.find(FIND_SOURCES);
-  const containers = creep.pos.findInRange(FIND_STRUCTURES, 1, {
-    filter: structure => {
-      return (structure.structureType === STRUCTURE_CONTAINER) && (structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
-    }
-  })
-  if (creep.harvest(sources[0]) === ERR_NOT_IN_RANGE) {
-    move(creep, sources[0].pos, "#ff0000");
+  const source = Game.getObjectById(creep.memory.source);
+  if (!source) return;
+
+  const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
+    filter: (structure): structure is StructureContainer => structure.structureType === STRUCTURE_CONTAINER
+  });
+
+  if (containers.length === 0) return;
+
+  const container = containers[0];
+
+  if (!creep.pos.isEqualTo(container.pos)) {
+    move(creep, container.pos, "#ff0000");
+    return;
   }
-  if (containers.length > 0) {
-    creep.transfer(containers[0], RESOURCE_ENERGY);
+
+  const miningPower = creep.getActiveBodyparts(WORK) * HARVEST_POWER;
+  const availableEnergy = Math.min(source.energy, miningPower);
+
+  if (container.store.getFreeCapacity(RESOURCE_ENERGY) >= availableEnergy) {
+    creep.harvest(source);
   }
 }
