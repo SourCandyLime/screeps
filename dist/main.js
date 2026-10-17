@@ -3318,13 +3318,13 @@ function runHARV(creep) {
     if (!creep.memory.source)
         return;
     if (Memory.bootstrap) {
-        bootstrap$1(creep);
+        bootstrap$2(creep);
     }
     else {
         nonBootstrap(creep);
     }
 }
-function bootstrap$1(creep) {
+function bootstrap$2(creep) {
     if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
         creep.memory.working = false;
     }
@@ -3376,6 +3376,58 @@ function nonBootstrap(creep) {
         const availableEnergy = Math.min(source.energy, miningPower);
         if (container.store.getFreeCapacity(RESOURCE_ENERGY) >= availableEnergy) {
             creep.harvest(source);
+        }
+    }
+}
+
+// roles/builder.ts
+function runBILL(creep) {
+    if (!creep.memory.source) {
+        creep.memory.source = getSource(creep);
+    }
+    if (!creep.memory.source)
+        return;
+    if (Memory.bootstrap) {
+        bootstrap$1(creep);
+    }
+}
+function bootstrap$1(creep) {
+    if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+        creep.memory.working = false;
+    }
+    if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+        creep.memory.working = true;
+    }
+    if (!creep.memory.working) {
+        const source = Game.getObjectById(creep.memory.source);
+        if (!source)
+            return;
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            move(creep, source.pos, "#ff8800");
+        }
+    }
+    else {
+        const builds = creep.room.find(FIND_MY_CONSTRUCTION_SITES);
+        if (builds.length > 0) {
+            if (creep.build(builds[0]) === ERR_NOT_IN_RANGE) {
+                move(creep, builds[0].pos, "#00ff94");
+            }
+        }
+        else {
+            const repairs = creep.room.find(FIND_STRUCTURES, {
+                filter: structure => structure.hits !== undefined && structure.hits < structure.hitsMax
+            });
+            if (repairs.length > 0) {
+                if (creep.repair(repairs[0]) === ERR_NOT_IN_RANGE) {
+                    move(creep, repairs[0].pos, "#ff8800");
+                }
+            }
+            else {
+                const dock = Game.flags["BILL-DOCK"];
+                if (dock && !creep.pos.isEqualTo(dock.pos)) {
+                    move(creep, dock.pos, "#ff8800");
+                }
+            }
         }
     }
 }
@@ -3469,6 +3521,9 @@ const loop = ErrorMapper.wrapLoop(() => {
         }
         else if (creep.memory.role === "UP") {
             runUP(creep);
+        }
+        else if (creep.memory.role === "BILL") {
+            runBILL(creep);
         }
     }
 });

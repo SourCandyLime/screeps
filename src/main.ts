@@ -4,6 +4,7 @@ import { ErrorMapper } from "utils/ErrorMapper";
 import { updateCount, updateCosts } from "utils/creepData";
 import { spawner } from "managers/spawnManager";
 import { runHARV } from "roles/harvester";
+import { runBILL } from "./roles/builder";
 import { runUP } from "./roles/upgrader";
 
 declare global {
@@ -106,6 +107,8 @@ export const loop = ErrorMapper.wrapLoop(() => {
       runHARV(creep);
     } else if (creep.memory.role === "UP") {
       runUP(creep);
+    } else if (creep.memory.role === "BILL") {
+      runBILL(creep);
     }
   }
 
