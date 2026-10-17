@@ -1,6 +1,9 @@
+// main.ts
+
 import { ErrorMapper } from "utils/ErrorMapper";
+import { updateCount, updateCosts } from "utils/creepData";
 import { spawner } from "managers/spawnManager";
-import { runHarvester } from "roles/harvester";
+import { runHARV } from "roles/harvester";
 
 declare global {
   /*
@@ -16,17 +19,18 @@ declare global {
     uuid: number;
     log: any;
     bootstrap: boolean;
-    targetCounts: Record<string, number>;
-    templates: Record<string, Record<number, BodyPartConstant[]>>
-    room: Room;
+    creepsRoleData: Record<string, Record<string, number>>;
+    templates: Record<string, Record<number, BodyPartConstant[]>>;
+    costs: Record<string, Record<number, number>>;
     spawn: string;
+    lastTemplates?: string;
   }
 
   interface CreepMemory {
     role: string;
     room: string;
     working: boolean;
-    source: Id<Source>;
+    source?: Id<Source>;
   }
 
 }
@@ -37,24 +41,39 @@ declare const global: {
 
 // When compiling TS to JS and bundling with rollup, the line numbers and file names in error messages change
 // This utility uses source maps to get the line numbers and file names of the original, TS source code
+
+Memory.creepsRoleData = {
+  HARV: { targetCount: 1, total: 0, tier: 0 },
+  UP: { targetCount: 1, total: 0, tier: 0 },
+  BILL: { targetCount: 0, total: 0, tier: 0 },
+  HAUL: { targetCount: 0, total: 0, tier: 0 },
+};
+
+Memory.templates = {
+  HARV: {
+    0: [MOVE, CARRY, WORK],
+    1: [MOVE, WORK, WORK],
+  },
+  UP: {
+    0: [MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, WORK],
+  },
+  BILL: {
+    0: [MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, WORK],
+  },
+  HAUL: {
+    0: [MOVE, MOVE, CARRY, CARRY],
+    1: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY],
+  }
+};
+
+Memory.costs = {};
+
+Memory.spawn = "S.1"
+
 export const loop = ErrorMapper.wrapLoop(() => {
   console.log(`Current game tick is ${Game.time}`);
-
-  Memory.targetCounts = {
-    HARV: 1,
-    UP: 0,
-    BOB: 0,
-    HAUL: 0,
-  }
-
-  Memory.templates = {
-    HARV: {
-      0: [MOVE, CARRY, WORK]
-    }
-  }
-
-  Memory.room = Game.rooms["E3S4"]
-  Memory.spawn = "S.1"
 
   // Automatically delete memory of missing creeps
   for (const name in Memory.creeps) {
@@ -67,12 +86,22 @@ export const loop = ErrorMapper.wrapLoop(() => {
 
   Memory.bootstrap = true;
 
+  updateCount();
+
+  const currentTemplates = JSON.stringify(Memory.templates);
+
+  if (Memory.lastTemplates !== currentTemplates) {
+    updateCosts();
+    Memory.lastTemplates = currentTemplates;
+  }
+
   spawner();
 
   for (const creep of Object.values(Game.creeps)) {
     if (creep.memory.role === "HARV") {
-      runHarvester(creep);
+      runHARV(creep);
     }
   }
 
 });
+

@@ -82,6 +82,7 @@ module.exports = {
     "one-var": ["error", "never"],
     "quote-props": "off",
     radix: "error",
+    "semi": ["error", "always"],
     "sort-imports": "warn",
     "spaced-comment": "error",
   }

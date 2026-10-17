@@ -7,45 +7,40 @@ export function spawner(): void {
 
   if (spawn.spawning) return;
 
-  // count rolls of all creeps
-  const harvs = countCreeps("HARV");
-  const ups = countCreeps("UP");
-  const bobs = countCreeps("BOB");
-  const hauls = countCreeps("HAUL");
-
-  if (Memory.targetCounts["HARV"] > harvs) {
-    spawnHarvester(spawn);
+  if (Memory.creepsRoleData.HARV.targetCount > Memory.creepsRoleData.HARV.total) {
+    spawnHARV(spawn);
   }
-  if (Memory.targetCounts["UP"] > ups) {
-    spawnUpgrader(spawn);
+  if (Memory.creepsRoleData.UP.targetCount > Memory.creepsRoleData.UP.total) {
+    spawnUP(spawn);
   }
-  if (Memory.targetCounts["BOB"] > bobs) {
-    spawnBuilder(spawn);
+  if (Memory.creepsRoleData.BILL.targetCount > Memory.creepsRoleData.BILL.total) {
+    spawnBILL(spawn);
   }
-  if (Memory.targetCounts["HAUL"] > hauls) {
-    spawnHauler(spawn);
+  if (Memory.creepsRoleData.HAUL.targetCount > Memory.creepsRoleData.HAUL.total) {
+    spawnHAUL(spawn);
   }
-
 }
 
-function spawnHarvester(spawn: StructureSpawn): void {
+function spawnHARV(spawn: StructureSpawn): void {
+  spawn.spawnCreep(Memory.templates.HARV[0], "HARV" + Game.time.toString(), {
+    memory: {role: "HARV", room: spawn.room.name, working: false}
+  });
 }
 
-function spawnBuilder(spawn: StructureSpawn): void {
+function spawnBILL(spawn: StructureSpawn): void {
+  spawn.spawnCreep(Memory.templates.BILL[0], "BILL" + Game.time.toString(), {
+    memory: { role: "BILL", room: spawn.room.name, working: false }
+  });
 }
 
-function spawnUpgrader(spawn: StructureSpawn): void {
+function spawnUP(spawn: StructureSpawn): void {
+  spawn.spawnCreep(Memory.templates.UP[0], "UP" + Game.time.toString(), {
+    memory: { role: "UP", room: spawn.room.name, working: false }
+  });
 }
 
-function spawnHauler(spawn: StructureSpawn): void {
-}
-
-function countCreeps(creepRole: string): number {
-  let count = 0;
-  for (const creep of Object.values(Game.creeps)) {
-    if (creep.memory.role === creepRole) {
-      count += 1;
-    }
-  }
-  return count;
+function spawnHAUL(spawn: StructureSpawn): void {
+  spawn.spawnCreep(Memory.templates.HAUL[0], "HAUL" + Game.time.toString(), {
+    memory: { role: "HAUL", room: spawn.room.name, working: false }
+  });
 }
