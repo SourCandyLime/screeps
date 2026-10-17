@@ -4,6 +4,7 @@ import { ErrorMapper } from "utils/ErrorMapper";
 import { updateCount, updateCosts } from "utils/creepData";
 import { spawner } from "managers/spawnManager";
 import { runHARV } from "roles/harvester";
+import { runUP } from "./roles/upgrader";
 
 declare global {
   /*
@@ -24,12 +25,14 @@ declare global {
     costs: Record<string, Record<number, number>>;
     spawn: string;
     lastTemplates?: string;
+    priorities: string[];
   }
 
   interface CreepMemory {
     role: string;
     room: string;
     working: boolean;
+    tier: number;
     source?: Id<Source>;
   }
 
@@ -37,40 +40,45 @@ declare global {
 // Syntax for adding properties to `global` (ex "global.log")
 declare const global: {
   log: any;
-}
+};
 
 // When compiling TS to JS and bundling with rollup, the line numbers and file names in error messages change
 // This utility uses source maps to get the line numbers and file names of the original, TS source code
 
-Memory.creepsRoleData = {
+Memory.creepsRoleData ??= {
   HARV: { targetCount: 1, total: 0, tier: 0 },
   UP: { targetCount: 1, total: 0, tier: 0 },
   BILL: { targetCount: 0, total: 0, tier: 0 },
   HAUL: { targetCount: 0, total: 0, tier: 0 },
 };
 
-Memory.templates = {
+Memory.templates ??= {
   HARV: {
     0: [MOVE, CARRY, WORK],
-    1: [MOVE, WORK, WORK],
+    1: [MOVE, WORK, WORK]
   },
   UP: {
     0: [MOVE, CARRY, WORK],
-    1: [MOVE, MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, WORK]
   },
   BILL: {
     0: [MOVE, CARRY, WORK],
-    1: [MOVE, MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, WORK]
   },
   HAUL: {
     0: [MOVE, MOVE, CARRY, CARRY],
-    1: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY],
+    1: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY]
   }
 };
 
-Memory.costs = {};
+Memory.costs ??= {};
 
-Memory.spawn = "S.1"
+Memory.spawn ??= "S1";
+
+Memory.bootstrap ??= true;
+
+Memory.priorities ??= ["HARV", "UP", "BILL", "HAUL"];
+
 
 export const loop = ErrorMapper.wrapLoop(() => {
   console.log(`Current game tick is ${Game.time}`);
@@ -81,10 +89,6 @@ export const loop = ErrorMapper.wrapLoop(() => {
       delete Memory.creeps[name];
     }
   }
-
-  const extensions = Object.values(Game.structures).filter(s => s.structureType === STRUCTURE_EXTENSION);
-
-  Memory.bootstrap = true;
 
   updateCount();
 
@@ -100,6 +104,8 @@ export const loop = ErrorMapper.wrapLoop(() => {
   for (const creep of Object.values(Game.creeps)) {
     if (creep.memory.role === "HARV") {
       runHARV(creep);
+    } else if (creep.memory.role === "UP") {
+      runUP(creep);
     }
   }
 

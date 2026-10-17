@@ -7,13 +7,14 @@ export function updateCount(): void {
 }
 
 export function updateCosts(): void {
-  for (const [role, teirs] of Object.entries(Memory.templates)) {
-    for (const [teir, body] of Object.entries(teirs)) {
-      Memory.costs[role][Number(teir)] = calculateCost(Memory.templates[role][Number(teir)]);
+  for (const [role, tiers] of Object.entries(Memory.templates)) {
+    Memory.costs[role] ??= {};
+
+    for (const [tier, body] of Object.entries(tiers)) {
+      Memory.costs[role][Number(tier)] = calculateCost(body);
     }
   }
 }
-
 function calculateCost(body: BodyPartConstant[]): number {
   return body.reduce((total, part) => total + BODYPART_COST[part], 0);
 }

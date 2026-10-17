@@ -3238,41 +3238,24 @@ class ErrorMapper {
 // Cache previously mapped traces to improve performance
 ErrorMapper.cache = {};
 
-// managers/spawnManager.ts
-function spawner() {
-    // sudo code: spawn needed creeps
-    const spawn = Game.spawns[Memory.spawn];
-    if (spawn.spawning)
-        return;
-    // count rolls of all creeps
-    Memory.counts.HARV.total = countCreeps("HARV");
-    Memory.counts.UP.total = countCreeps("UP");
-    Memory.counts.BILL.total = countCreeps("BILL");
-    Memory.counts.HAUL.total = countCreeps("HAUL");
-    if (Memory.counts.HARV.target > Memory.counts.HARV.total) {
-        spawnHARV(spawn);
-    }
-    if (Memory.counts.UP.target > Memory.counts.UP.total) {
-        spawnUP(spawn);
-    }
-    if (Memory.counts.BILL.target > Memory.counts.BILL.total) {
-        spawnBILL(spawn);
-    }
-    if (Memory.counts.HAUL.target > Memory.counts.HAUL.total) {
-        spawnHAUL(spawn);
+function updateCount() {
+    Memory.creepsRoleData.HARV.total = countCreeps("HARV");
+    Memory.creepsRoleData.UP.total = countCreeps("UP");
+    Memory.creepsRoleData.BILL.total = countCreeps("BILL");
+    Memory.creepsRoleData.HAUL.total = countCreeps("HAUL");
+}
+function updateCosts() {
+    var _a;
+    var _b;
+    for (const [role, tiers] of Object.entries(Memory.templates)) {
+        (_a = (_b = Memory.costs)[role]) !== null && _a !== void 0 ? _a : (_b[role] = {});
+        for (const [tier, body] of Object.entries(tiers)) {
+            Memory.costs[role][Number(tier)] = calculateCost(body);
+        }
     }
 }
-function spawnHARV(spawn) {
-    spawn.spawnCreep(Memory.templates.HARV[0], "HARV" + Game.time.toString(), { memory: { role: "HARV", room: Memory.room, working: false } });
-}
-function spawnBILL(spawn) {
-    spawn.spawnCreep(Memory.templates.BILL[0], "BILL" + Game.time.toString(), { memory: { role: "BILL", room: Memory.room, working: false } });
-}
-function spawnUP(spawn) {
-    spawn.spawnCreep(Memory.templates.BILL[0], "UP" + Game.time.toString(), { memory: { role: "UP", room: Memory.room, working: false } });
-}
-function spawnHAUL(spawn) {
-    spawn.spawnCreep(Memory.templates.BILL[0], "HAUL" + Game.time.toString(), { memory: { role: "HAUL", room: Memory.room, working: false } });
+function calculateCost(body) {
+    return body.reduce((total, part) => total + BODYPART_COST[part], 0);
 }
 function countCreeps(creepRole) {
     let count = 0;
@@ -3282,6 +3265,39 @@ function countCreeps(creepRole) {
         }
     }
     return count;
+}
+
+// managers/spawnManager.ts
+function spawner() {
+    const spawn = Game.spawns[Memory.spawn];
+    if (!spawn || spawn.spawning)
+        return;
+    for (const role of Memory.priorities) {
+        if (attemptSpawn(spawn, role))
+            return;
+    }
+}
+function attemptSpawn(spawn, role) {
+    if (Memory.creepsRoleData[role].targetCount <= Memory.creepsRoleData[role].total) {
+        return false;
+    }
+    const result = spawnROLE(spawn, role);
+    if (result !== OK && result !== ERR_NOT_ENOUGH_ENERGY) {
+        console.log(`Spawning ${role} failed: ${result}`);
+    }
+    return result === OK;
+}
+function spawnROLE(spawn, role) {
+    var _a;
+    const tier = Memory.creepsRoleData[role].tier;
+    const body = (_a = Memory.templates[role]) === null || _a === void 0 ? void 0 : _a[tier];
+    if (!body) {
+        console.log(`Missing template for ${role} tier ${tier}`);
+        return ERR_INVALID_ARGS;
+    }
+    return spawn.spawnCreep(body, role + Game.time.toString(), {
+        memory: { role, room: spawn.room.name, working: false, tier }
+    });
 }
 
 // managers/moveManager.ts
@@ -3302,33 +3318,41 @@ function runHARV(creep) {
     if (!creep.memory.source)
         return;
     if (Memory.bootstrap) {
-        bootstrap(creep);
+        bootstrap$1(creep);
     }
     else {
         nonBootstrap(creep);
     }
 }
-function bootstrap(creep) {
-    if (creep.store.getFreeCapacity() > 0) {
-        if (creep.memory.source) {
-            const source = Game.getObjectById(creep.memory.source);
-            if (source) {
-                if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-                    move(creep, source.pos, "#ff8800");
-                }
-            }
+function bootstrap$1(creep) {
+    if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+        creep.memory.working = false;
+    }
+    if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+        creep.memory.working = true;
+    }
+    if (!creep.memory.working) {
+        const source = Game.getObjectById(creep.memory.source);
+        if (!source)
+            return;
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            move(creep, source.pos, "#ff8800");
         }
     }
     else {
         const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: structure => {
-                return ((structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) &&
-                    structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
-            }
+            filter: structure => (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) &&
+                structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
         });
         if (targets.length > 0) {
             if (creep.transfer(targets[0], RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
                 move(creep, targets[0].pos, "#FFee00");
+            }
+        }
+        else {
+            const dock = Game.flags["HARV-DOCK"];
+            if (dock && !creep.pos.isEqualTo(dock.pos)) {
+                move(creep, dock.pos, "#FF0000");
             }
         }
     }
@@ -3356,47 +3380,74 @@ function nonBootstrap(creep) {
     }
 }
 
+// roles/upgrader.ts
+function runUP(creep) {
+    if (!creep.memory.source) {
+        creep.memory.source = getSource(creep);
+    }
+    if (!creep.memory.source)
+        return;
+    if (Memory.bootstrap) {
+        bootstrap(creep);
+    }
+}
+function bootstrap(creep) {
+    if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+        creep.memory.working = false;
+    }
+    if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+        creep.memory.working = true;
+    }
+    if (!creep.memory.working) {
+        const source = Game.getObjectById(creep.memory.source);
+        if (!source)
+            return;
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            move(creep, source.pos, "#ff8800");
+        }
+    }
+    else {
+        const controller = creep.room.controller;
+        if (!controller)
+            return;
+        if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) {
+            move(creep, controller.pos, "#00ff94");
+        }
+    }
+}
+
 // main.ts
+var _a, _b, _c, _d, _e, _f;
 // When compiling TS to JS and bundling with rollup, the line numbers and file names in error messages change
 // This utility uses source maps to get the line numbers and file names of the original, TS source code
-Memory.counts = {
-    HARV: { target: 1, total: 0 },
-    UP: { target: 0, total: 0 },
-    BILL: { target: 0, total: 0 },
-    HAUL: { target: 0, total: 0 }
-};
-Memory.templates = {
+(_a = Memory.creepsRoleData) !== null && _a !== void 0 ? _a : (Memory.creepsRoleData = {
+    HARV: { targetCount: 1, total: 0, tier: 0 },
+    UP: { targetCount: 1, total: 0, tier: 0 },
+    BILL: { targetCount: 0, total: 0, tier: 0 },
+    HAUL: { targetCount: 0, total: 0, tier: 0 },
+});
+(_b = Memory.templates) !== null && _b !== void 0 ? _b : (Memory.templates = {
     HARV: {
         0: [MOVE, CARRY, WORK],
-        1: [MOVE, WORK, WORK],
+        1: [MOVE, WORK, WORK]
     },
     UP: {
         0: [MOVE, CARRY, WORK],
+        1: [MOVE, MOVE, CARRY, WORK]
     },
     BILL: {
         0: [MOVE, CARRY, WORK],
+        1: [MOVE, MOVE, CARRY, WORK]
     },
     HAUL: {
-        0: [MOVE, MOVE, CARRY],
+        0: [MOVE, MOVE, CARRY, CARRY],
+        1: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY]
     }
-};
-Memory.costs = {
-    HARV: {
-        0: 0,
-        1: 0,
-    },
-    UP: {
-        0: 0,
-    },
-    BILL: {
-        0: 0,
-    },
-    HAUL: {
-        0: 0,
-    }
-};
-Memory.room = "E3S4";
-Memory.spawn = "S.1";
+});
+(_c = Memory.costs) !== null && _c !== void 0 ? _c : (Memory.costs = {});
+(_d = Memory.spawn) !== null && _d !== void 0 ? _d : (Memory.spawn = "S1");
+(_e = Memory.bootstrap) !== null && _e !== void 0 ? _e : (Memory.bootstrap = true);
+(_f = Memory.priorities) !== null && _f !== void 0 ? _f : (Memory.priorities = ["HARV", "UP", "BILL", "HAUL"]);
 const loop = ErrorMapper.wrapLoop(() => {
     console.log(`Current game tick is ${Game.time}`);
     // Automatically delete memory of missing creeps
@@ -3405,12 +3456,19 @@ const loop = ErrorMapper.wrapLoop(() => {
             delete Memory.creeps[name];
         }
     }
-    Object.values(Game.structures).filter(s => s.structureType === STRUCTURE_EXTENSION);
-    Memory.bootstrap = true;
+    updateCount();
+    const currentTemplates = JSON.stringify(Memory.templates);
+    if (Memory.lastTemplates !== currentTemplates) {
+        updateCosts();
+        Memory.lastTemplates = currentTemplates;
+    }
     spawner();
     for (const creep of Object.values(Game.creeps)) {
         if (creep.memory.role === "HARV") {
             runHARV(creep);
+        }
+        else if (creep.memory.role === "UP") {
+            runUP(creep);
         }
     }
 });

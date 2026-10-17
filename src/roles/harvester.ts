@@ -18,27 +18,36 @@ export function runHARV(creep: Creep): void {
 }
 
 function bootstrap(creep: Creep): void {
-  if (creep.store.getFreeCapacity() > 0) {
-    if (creep.memory.source) {
-      const source = Game.getObjectById(creep.memory.source);
-      if (source) {
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-          move(creep, source.pos, "#ff8800");
-        }
-      }
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const source = Game.getObjectById(creep.memory.source!);
+    if (!source) return;
+
+    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+      move(creep, source.pos, "#ff8800");
     }
   } else {
     const targets = creep.room.find(FIND_STRUCTURES, {
-      filter: structure => {
-        return (
-          (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) &&
-          structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        );
-      }
+      filter: structure =>
+        (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) &&
+        structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     });
+
     if (targets.length > 0) {
       if (creep.transfer(targets[0], RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
         move(creep, targets[0].pos, "#FFee00");
+      }
+    } else {
+      const dock = Game.flags["HARV-DOCK"];
+      if (dock && !creep.pos.isEqualTo(dock.pos)) {
+        move(creep, dock.pos, "#FF0000");
       }
     }
   }

@@ -1,46 +1,41 @@
 // managers/spawnManager.ts
 
 export function spawner(): void {
-  // sudo code: spawn needed creeps
-
   const spawn = Game.spawns[Memory.spawn];
 
-  if (spawn.spawning) return;
+  if (!spawn || spawn.spawning) return;
 
-  if (Memory.creepsRoleData.HARV.targetCount > Memory.creepsRoleData.HARV.total) {
-    spawnHARV(spawn);
-  }
-  if (Memory.creepsRoleData.UP.targetCount > Memory.creepsRoleData.UP.total) {
-    spawnUP(spawn);
-  }
-  if (Memory.creepsRoleData.BILL.targetCount > Memory.creepsRoleData.BILL.total) {
-    spawnBILL(spawn);
-  }
-  if (Memory.creepsRoleData.HAUL.targetCount > Memory.creepsRoleData.HAUL.total) {
-    spawnHAUL(spawn);
+  for (const role of Memory.priorities) {
+    if (attemptSpawn(spawn, role)) return;
   }
 }
 
-function spawnHARV(spawn: StructureSpawn): void {
-  spawn.spawnCreep(Memory.templates.HARV[0], "HARV" + Game.time.toString(), {
-    memory: {role: "HARV", room: spawn.room.name, working: false}
-  });
+function attemptSpawn(spawn: StructureSpawn, role: string): boolean {
+  if (Memory.creepsRoleData[role].targetCount <= Memory.creepsRoleData[role].total) {
+    return false;
+  }
+
+  const result = spawnROLE(spawn, role);
+
+  if (result !== OK && result !== ERR_NOT_ENOUGH_ENERGY) {
+    console.log(`Spawning ${role} failed: ${result}`);
+  }
+
+  return result === OK;
 }
 
-function spawnBILL(spawn: StructureSpawn): void {
-  spawn.spawnCreep(Memory.templates.BILL[0], "BILL" + Game.time.toString(), {
-    memory: { role: "BILL", room: spawn.room.name, working: false }
-  });
-}
+function spawnROLE(spawn: StructureSpawn, role: string): ScreepsReturnCode {
+  const tier = Memory.creepsRoleData[role].tier;
 
-function spawnUP(spawn: StructureSpawn): void {
-  spawn.spawnCreep(Memory.templates.UP[0], "UP" + Game.time.toString(), {
-    memory: { role: "UP", room: spawn.room.name, working: false }
-  });
-}
+  const body = Memory.templates[role]?.[tier];
 
-function spawnHAUL(spawn: StructureSpawn): void {
-  spawn.spawnCreep(Memory.templates.HAUL[0], "HAUL" + Game.time.toString(), {
-    memory: { role: "HAUL", room: spawn.room.name, working: false }
+  if (!body) {
+    console.log(`Missing template for ${role} tier ${tier}`);
+    return ERR_INVALID_ARGS;
+  }
+
+  return spawn.spawnCreep(body, role + Game.time.toString(), {
+    memory: { role, room: spawn.room.name, working: false, tier }
   });
+
 }
