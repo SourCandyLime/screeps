@@ -1,6 +1,6 @@
 // roles/harvester.ts
 
-import { move } from "managers/moveManager"
+import { move } from "managers/moveManager";
 import { getSource } from "managers/sourceManager";
 
 export function runHARV(creep: Creep): void {
@@ -10,9 +10,14 @@ export function runHARV(creep: Creep): void {
 
   if (!creep.memory.source) return;
 
-  if (Memory.bootstrap) {
+  if (Memory.roomData[creep.memory.room].bootstrap) {
+    bootstrap(creep);
+  } else if (creep.memory.tier === 0) {
     bootstrap(creep);
   } else {
+    if (Memory.roomData[creep.memory.room].lastBoostrap) {
+      creep.memory.source = getSource(creep);
+    }
     nonBootstrap(creep);
   }
 }
@@ -54,28 +59,34 @@ function bootstrap(creep: Creep): void {
 }
 
 function nonBootstrap(creep: Creep): void {
-  if (creep.memory.source) {
+  if (creep.memory.source && !(creep.memory.tier === 0)) {
     const source = Game.getObjectById(creep.memory.source);
     if (!source) return;
 
-    const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
-      filter: (structure): structure is StructureContainer => structure.structureType === STRUCTURE_CONTAINER
-    });
+    const target = Memory.roomData[creep.memory.room].sources?.[creep.memory.source!]?.creeps[creep.name];
 
-    if (containers.length === 0) return;
+    if (target) {
+      const targetPos = new RoomPosition(target.x, target.y, creep.memory.room);
+      if (!creep.pos.isEqualTo(targetPos)) {
+        move(creep, targetPos, "#ff0000");
+        return;
+      }
 
-    const container = containers[0];
+      const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
+        filter: (structure): structure is StructureContainer =>
+          structure.structureType === STRUCTURE_CONTAINER && structure.pos.isEqualTo(targetPos)
+      });
 
-    if (!creep.pos.isEqualTo(container.pos)) {
-      move(creep, container.pos, "#ff0000");
-      return;
-    }
+      if (containers.length === 0) return;
 
-    const miningPower = creep.getActiveBodyparts(WORK) * HARVEST_POWER;
-    const availableEnergy = Math.min(source.energy, miningPower);
+      const miningPower = creep.getActiveBodyparts(WORK) * HARVEST_POWER;
+      const availableEnergy = Math.min(source.energy, miningPower);
 
-    if (container.store.getFreeCapacity(RESOURCE_ENERGY) >= availableEnergy) {
-      creep.harvest(source);
+      if (containers[0].store.getFreeCapacity(RESOURCE_ENERGY) >= availableEnergy) {
+        creep.harvest(source);
+      }
+    } else {
+      creep.memory.source = getSource(creep);
     }
   }
 }

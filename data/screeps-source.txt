@@ -1,0 +1,1200 @@
+
+============================================================
+FILE: src/main.ts
+============================================================
+
+// main.ts
+
+import { ErrorMapper } from "utils/ErrorMapper";
+import { updateCounts, updateCosts, checkRetire } from "utils/creepData";
+import { runSpawners } from "managers/spawnManager";
+import { bootstrapManager } from "managers/bootstrapManager";
+import { runHARV } from "roles/harvester";
+import { runBILL } from "roles/builder";
+import { runUP } from "roles/upgrader";
+import { runRETIRE } from "roles/retire";
+import { updateTargetCounts } from "managers/countManager";
+import { runHAUL } from "roles/hauler";
+import { updateTiers } from "managers/tierManager";
+
+declare global {
+  /*
+    Example types, expand on these or remove them and add your own.
+    Note: Values, properties defined here do no fully *exist* by this type definition alone.
+          You must also give them an implementation if you would like to use them. (ex. actually setting a `role` property in a Creeps memory)
+
+    Types added in this `global` block are in an ambient, global context. This is needed because `main.ts` is a module file (uses import or export).
+    Interfaces matching on name from @types/screeps will be merged. This is how you can extend the 'built-in' interfaces from @types/screeps.
+  */
+  // Memory extension samples
+  interface Memory {
+    uuid: number;
+    log: any;
+    templates: Record<string, Record<number, BodyPartConstant[]>>;
+    costs: Record<string, Record<number, number>>;
+    spawn: string;
+    lastTemplates?: string;
+    priorities: string[];
+    roomData: Record<string, RoomData>;
+    nameCounters: Record<string, number>;
+  }
+
+  interface CreepMemory {
+    role: string;
+    room: string;
+    working: boolean;
+    tier: number;
+    source?: Id<Source>;
+  }
+
+  interface RoomData {
+    bootstrap: boolean;
+    creepsData: Record<string, CreepsData>;
+    spawns: string[];
+    sources?: Record<Id<Source>, sourceData>;
+    lastBoostrap: boolean;
+  }
+
+  interface sourceData {
+    tiles: tile[];
+    openSpace: boolean;
+    openTiles: tile[];
+    creeps: Record<string, tile>;
+  }
+
+  interface tile {
+    x: number;
+    y: number;
+    type: number;
+  }
+
+  interface CreepsData {
+    targetCount: number;
+    totalCount: number;
+    tier: number;
+  }
+
+}
+// Syntax for adding properties to `global` (ex "global.log")
+declare const global: {
+  log: any;
+};
+
+// When compiling TS to JS and bundling with rollup, the line numbers and file names in error messages change
+// This utility uses source maps to get the line numbers and file names of the original, TS source code
+
+Memory.templates ??= {
+  HARV: {
+    0: [MOVE, CARRY, WORK, WORK],
+    1: [MOVE, WORK, WORK, WORK, WORK, WORK],
+  },
+  UP: {
+    0: [MOVE, MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, CARRY, CARRY, WORK, WORK, WORK],
+  },
+  BILL: {
+    0: [MOVE, CARRY, WORK, WORK],
+    1: [MOVE, MOVE, CARRY, CARRY, CARRY, WORK, WORK, WORK],
+  },
+  HAUL: {
+    0: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY],
+    1: [MOVE, MOVE, MOVE, MOVE, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY]
+  }
+};
+
+Memory.costs ??= {};
+
+Memory.roomData ??= {
+  W21S33: {
+    bootstrap: true,
+    creepsData: {
+      HARV: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      UP: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      BILL: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      HAUL: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      }
+    },
+    spawns: ["S1"],
+    lastBoostrap: true,
+  }
+};
+
+Memory.priorities ??= ["HARV", "UP", "BILL", "HAUL"];
+
+
+
+export const loop = ErrorMapper.wrapLoop(() => {
+  console.log(`Current game tick is ${Game.time}`);
+
+  // Get names of creeps currently spawning
+  const spawningNames = new Set(
+    Object.values(Game.spawns)
+      .filter(spawn => spawn.spawning !== null)
+      .map(spawn => spawn.spawning!.name)
+  );
+
+  // Delete memory only for genuinely missing creeps
+  for (const name in Memory.creeps) {
+    if (!(name in Game.creeps) && !(spawningNames.has(name))) {
+      delete Memory.creeps[name];
+    }
+  }
+
+  const currentTemplates = JSON.stringify(Memory.templates);
+
+  if (Memory.lastTemplates !== currentTemplates) {
+    updateCosts();
+    Memory.lastTemplates = currentTemplates;
+  }
+
+  bootstrapManager();
+  updateCounts();
+  updateTiers();
+
+  for (const creep of Object.values(Game.creeps)) {
+    checkRetire(creep);
+  }
+
+  updateCounts();
+  updateTargetCounts();
+  runSpawners();
+
+  for (const creep of Object.values(Game.creeps)) {
+    if (!creep.memory.role) {
+      creep.suicide();
+    }
+
+    if (creep.memory.role === "HARV") {
+      runHARV(creep);
+    } else if (creep.memory.role === "UP") {
+      runUP(creep);
+    } else if (creep.memory.role === "BILL") {
+      runBILL(creep);
+    } else if (creep.memory.role === "HAUL") {
+      runHAUL(creep);
+    } else if (creep.memory.role === "RETIRE") {
+      runRETIRE(creep);
+    }
+  }
+
+  for (const room of Object.values(Memory.roomData)) {
+    if (room.bootstrap !== room.lastBoostrap) {
+      room.lastBoostrap = room.bootstrap;
+    }
+  }
+});
+
+
+
+
+============================================================
+FILE: src/managers/bootstrapManager.ts
+============================================================
+
+// managers/bootstrapManager.ts
+
+export function bootstrapManager() {
+  for (const room of Object.keys(Memory.roomData)) {
+    const data = Game.rooms[room];
+    if (!data) continue;
+    const goodSources = data.find(FIND_SOURCES, {
+      filter: source => source.pos.findInRange(FIND_STRUCTURES,1, {
+        filter: structure => structure.structureType === STRUCTURE_CONTAINER
+      }).length > 0
+    });
+    const extentions = data.find(FIND_MY_STRUCTURES, {
+      filter: structure => structure.structureType === STRUCTURE_EXTENSION
+    });
+    Memory.roomData[room].bootstrap = !((extentions.length >= 5) && (goodSources.length > 0));
+  }
+}
+
+
+
+============================================================
+FILE: src/managers/countManager.ts
+============================================================
+
+export function updateTargetCounts() {
+  for (const [roomName, data] of Object.entries(Memory.roomData)) {
+    const creeps = data.creepsData;
+    const room = Game.rooms[roomName];
+    if (data.bootstrap) {
+      creeps.HARV.targetCount = 1;
+      creeps.BILL.targetCount = 2;
+      creeps.UP.targetCount = 2;
+      creeps.HAUL.targetCount = bootstrapHaulers(room);
+    } else {
+      creeps.HARV.targetCount = 2;
+      creeps.BILL.targetCount = 2;
+      creeps.UP.targetCount = 2;
+      creeps.HAUL.targetCount = room.find(FIND_STRUCTURES, {filter: structure => structure.structureType === STRUCTURE_CONTAINER}).length;
+    }
+  }
+}
+
+function bootstrapHaulers(room: Room): number {
+  return room.find(FIND_RUINS, { filter: ruin => ruin.store.getUsedCapacity(RESOURCE_ENERGY) > 300 }).length + room.find(FIND_TOMBSTONES, { filter: tomb => tomb.store.getUsedCapacity(RESOURCE_ENERGY) > 300 }).length;
+}
+
+
+
+============================================================
+FILE: src/managers/moveManager.ts
+============================================================
+
+// managers/moveManager.ts
+
+export function move(creep: Creep, target: RoomPosition, pathColor: string): void {
+  creep.moveTo(target, {visualizePathStyle: {stroke: pathColor}});
+}
+
+
+
+============================================================
+FILE: src/managers/nameManager.ts
+============================================================
+
+const names: Record<string, string[]> = {
+  HARV: ["Drill", "Pick", "Crack", "Crunch", "Punch"],
+  UP: ["Newton", "Sage", "Daedalus", "Einstein", "Tesla"],
+  BILL: ["Mason", "Forge", "Bob", "Nail", "Hammer"],
+  HAUL: ["Atlas", "Porter", "Sisyphus", "Karry", "Cargo"]
+};
+
+export function getCreepName(role: string): string {
+  Memory.nameCounters ??= {};
+
+  const pool = names[role] ?? [role];
+  const counter = Memory.nameCounters[role] ?? 0;
+
+  const index = counter % pool.length;
+  const generation = Math.floor(counter / pool.length) + 1;
+
+  return `${pool[index]} ${toRoman(generation)}`;
+}
+
+export function advanceCreepName(role: string): void {
+  Memory.nameCounters ??= {};
+  Memory.nameCounters[role] = (Memory.nameCounters[role] ?? 0) + 1;
+}
+
+function toRoman(count: number): string {
+  const numerals: [number, string][] = [
+    [1000, "M"],
+    [900, "CM"],
+    [500, "D"],
+    [400, "CD"],
+    [100, "C"],
+    [90, "XC"],
+    [50, "L"],
+    [40, "XL"],
+    [10, "X"],
+    [9, "IX"],
+    [5, "V"],
+    [4, "IV"],
+    [1, "I"]
+  ];
+
+  let result = "";
+
+  for (const [value, numeral] of numerals) {
+    while (count >= value) {
+      result += numeral;
+      count -= value;
+    }
+  }
+
+  return result;
+}
+
+
+
+============================================================
+FILE: src/managers/sourceManager.ts
+============================================================
+
+
+export function getSource(creep: Creep): Id<Source> | undefined {
+  const roomName = creep.memory.room;
+  const room = Game.rooms[roomName];
+  const roomData = Memory.roomData[roomName];
+
+  if (!room || !roomData) return undefined;
+
+  roomData.sources ??= {};
+
+  const sources = room.find(FIND_SOURCES);
+
+  // Discover and cache sources.
+  for (const source of sources) {
+    if (!roomData.sources[source.id]) {
+      storeSource(source);
+    }
+  }
+
+  // Remove assignments belonging to dead creeps.
+  for (const data of Object.values(roomData.sources)) {
+    for (const name of Object.keys(data.creeps)) {
+      if (!Game.creeps[name] && !Memory.creeps[name]) {
+        delete data.creeps[name];
+      }
+    }
+
+    updateOpenSpace(data);
+  }
+
+  const requiresContainer =
+    !roomData.bootstrap &&
+    creep.memory.role === "HARV" &&
+    creep.memory.tier > 0;
+
+  // Check existing assignment.
+  for (const source of sources) {
+    const data = roomData.sources[source.id];
+    const assigned = data.creeps[creep.name];
+
+    if (!assigned) continue;
+
+    if (
+      !requiresContainer ||
+      isContainerTile(source, assigned)
+    ) {
+      return source.id;
+    }
+
+    // The assignment is no longer suitable.
+    delete data.creeps[creep.name];
+    updateOpenSpace(data);
+  }
+
+  let bestSource: Source | undefined;
+  let bestTiles: tile[] = [];
+
+  // Find the source with the most available valid positions.
+  for (const source of sources) {
+    const data = roomData.sources[source.id];
+
+    const validTiles = requiresContainer
+      ? getContainerTiles(source, data)
+      : data.openTiles;
+
+    const available = validTiles.filter(
+      position => !isAssigned(data, position)
+    );
+
+    if (available.length > bestTiles.length) {
+      bestSource = source;
+      bestTiles = available;
+    }
+  }
+
+  if (!bestSource || bestTiles.length === 0) {
+    return undefined;
+  }
+
+  // Choose the closest available position.
+  const selected = bestTiles.reduce((closest, current) => {
+    const currentDistance =
+      creep.pos.getRangeTo(current.x, current.y);
+
+    const closestDistance =
+      creep.pos.getRangeTo(closest.x, closest.y);
+
+    return currentDistance < closestDistance
+      ? current
+      : closest;
+  });
+
+  const data = roomData.sources[bestSource.id];
+
+  data.creeps[creep.name] = selected;
+  updateOpenSpace(data);
+
+  return bestSource.id;
+}
+
+function storeSource(source: Source): void {
+  const roomName = source.room.name;
+  const roomData = Memory.roomData[roomName];
+
+  roomData.sources ??= {};
+
+  const terrain = Game.map.getRoomTerrain(roomName);
+
+  const tiles: tile[] = [];
+  const openTiles: tile[] = [];
+
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (dx === 0 && dy === 0) continue;
+
+      const x = source.pos.x + dx;
+      const y = source.pos.y + dy;
+
+      if (x < 0 || x > 49 || y < 0 || y > 49) continue;
+
+      const type = terrain.get(x, y);
+      const position: tile = { x, y, type };
+
+      tiles.push(position);
+
+      if ((type & TERRAIN_MASK_WALL) === 0) {
+        openTiles.push(position);
+      }
+    }
+  }
+
+  roomData.sources[source.id] = {
+    tiles,
+    openSpace: openTiles.length > 0,
+    openTiles,
+    creeps: {}
+  };
+}
+
+function getContainerTiles(
+  source: Source,
+  data: sourceData
+): tile[] {
+  const containers = source.pos.findInRange(
+    FIND_STRUCTURES,
+    1,
+    {
+      filter: (structure): structure is StructureContainer =>
+        structure.structureType === STRUCTURE_CONTAINER
+    }
+  );
+
+  return data.openTiles.filter(position =>
+    containers.some(container =>
+      container.pos.x === position.x &&
+      container.pos.y === position.y
+    )
+  );
+}
+
+function isContainerTile(
+  source: Source,
+  position: tile
+): boolean {
+  const containers = source.pos.findInRange(
+    FIND_STRUCTURES,
+    1,
+    {
+      filter: (structure): structure is StructureContainer =>
+        structure.structureType === STRUCTURE_CONTAINER
+    }
+  );
+
+  return containers.some(container =>
+    container.pos.x === position.x &&
+    container.pos.y === position.y
+  );
+}
+
+function isAssigned(
+  data: sourceData,
+  position: tile
+): boolean {
+  return Object.values(data.creeps).some(
+    assigned =>
+      assigned.x === position.x &&
+      assigned.y === position.y
+  );
+}
+
+function updateOpenSpace(data: sourceData): void {
+  data.openSpace = data.openTiles.some(
+    position => !isAssigned(data, position)
+  );
+}
+
+
+
+============================================================
+FILE: src/managers/spawnManager.ts
+============================================================
+
+// managers/spawnManager.ts
+
+import { advanceCreepName, getCreepName } from "./nameManager";
+
+export function runSpawners(): void {
+  for (const room of Object.keys(Memory.roomData)) {
+    const spawn = Game.spawns[Memory.roomData[room].spawns[0]];
+
+    if (!spawn || spawn.spawning) continue;
+
+    for (const role of Memory.priorities) {
+      if (attemptSpawn(spawn, role)) {
+        advanceCreepName(role);
+        break;
+      }
+    }
+  }
+}
+
+function attemptSpawn(spawn: StructureSpawn, role: string): boolean {
+  if (Memory.roomData[spawn.room.name].creepsData[role].targetCount <= Memory.roomData[spawn.room.name].creepsData[role].totalCount) {
+    return false;
+  }
+
+  const result = spawnROLE(spawn, role);
+
+  if (result !== OK && result !== ERR_NOT_ENOUGH_ENERGY) {
+    console.log(`Spawning ${role} failed: ${result}`);
+  }
+
+  return result === OK;
+}
+
+function spawnROLE(spawn: StructureSpawn, role: string): ScreepsReturnCode {
+  const tier = Memory.roomData[spawn.room.name].creepsData[role].tier;
+  const body = Memory.templates[role]?.[tier];
+
+  if (!body) {
+    console.log(`Missing template for ${role} tier ${tier}`);
+    return ERR_INVALID_ARGS;
+  }
+
+  const name = getCreepName(role);
+
+  return spawn.spawnCreep(body, "T" + String(tier) + " " + name, {
+    memory: { role, room: spawn.room.name, working: false, tier }
+  });
+
+}
+
+
+
+============================================================
+FILE: src/managers/tierManager.ts
+============================================================
+
+export function updateTiers(): void {
+  for (const room of Object.keys(Memory.roomData)) {
+    for (const [role, data] of Object.entries(Memory.roomData[room].creepsData)) {
+      for (const [tier, body] of Object.entries(Memory.templates[role])) {
+        if (Game.rooms[room].energyCapacityAvailable >= Memory.costs[role][Number(tier)]) {
+          data.tier = Number(tier);
+        }
+      }
+      if (role === "HARV") {
+        if (
+          (data.totalCount === 0 &&
+          Game.rooms[room].energyAvailable < Memory.costs[role][data.tier]) ||
+            Game.rooms[room].find(FIND_STRUCTURES, {
+              filter: structure => structure.structureType === STRUCTURE_CONTAINER
+            }).length === 0
+        ) {
+          data.tier = 0;
+        }
+      } else if (role === "HAUL") {
+        if (data.totalCount === 0 && Game.rooms[room].energyCapacityAvailable < Memory.costs[role][data.tier]) {
+          data.tier = 0;
+        }
+      }
+    }
+  }
+}
+
+
+
+============================================================
+FILE: src/roles/builder.ts
+============================================================
+
+// roles/builder.ts
+
+import { move } from "managers/moveManager";
+import { getSource } from "managers/sourceManager";
+1
+export function runBILL(creep: Creep): void {
+  if (!creep.memory.source) {
+    creep.memory.source = getSource(creep);
+  }
+
+  if (!creep.memory.source) return;
+
+  if (Memory.roomData[creep.room.name].bootstrap) {
+    bootstrap(creep);
+  } else {
+    nonBootstrap(creep);
+  }
+}
+
+function bootstrap(creep: Creep): void {
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const source = Game.getObjectById(creep.memory.source!);
+    if (!source) return;
+
+    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+      move(creep, source.pos, "#ff8800");
+    }
+  } else {
+    build(creep);
+  }
+}
+
+function nonBootstrap(creep: Creep): void {
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const containers = creep.room.find(FIND_STRUCTURES, {
+      filter: structure => structure.structureType === STRUCTURE_CONTAINER
+    });
+    if (containers.length === 0) return;
+
+    const container = containers.filter(
+      container =>
+        container.structureType === STRUCTURE_CONTAINER && container.store.getUsedCapacity(RESOURCE_ENERGY) > 0
+    );
+
+    if (container.length === 0) return;
+
+    const target = creep.pos.findClosestByPath(container);
+
+    if (!target) return;
+
+    if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      move(creep, target.pos, "#ff8800");
+    }
+  } else {
+    build(creep);
+  }
+}
+
+function build(creep: Creep): void {
+  const builds = creep.room.find(FIND_MY_CONSTRUCTION_SITES);
+  if (builds.length > 0) {
+    if (creep.build(builds[0]) === ERR_NOT_IN_RANGE) {
+      move(creep, builds[0].pos, "#00ff94");
+    }
+  } else {
+    if (creep.pos.findInRange(FIND_SOURCES, 1).length > 0) {
+      const dock = Game.flags["BILL-DOCK"];
+      if (dock && !creep.pos.isEqualTo(dock.pos)) {
+        move(creep, dock.pos, "#ff8800");
+      }
+    }
+    const repairs = creep.room.find(FIND_STRUCTURES, {
+      filter: structure => structure.hits !== undefined && structure.hits < structure.hitsMax
+    });
+    if (repairs.length > 0) {
+      if (creep.repair(repairs[0]) === ERR_NOT_IN_RANGE) {
+        move(creep, repairs[0].pos, "#ff8800");
+      }
+    } else {
+      const dock = Game.flags["BILL-DOCK"];
+      if (dock && !creep.pos.isEqualTo(dock.pos)) {
+        move(creep, dock.pos, "#ff8800");
+      }
+    }
+  }
+}
+
+
+
+============================================================
+FILE: src/roles/harvester.ts
+============================================================
+
+// roles/harvester.ts
+
+import { move } from "managers/moveManager";
+import { getSource } from "managers/sourceManager";
+
+export function runHARV(creep: Creep): void {
+  if (!creep.memory.source) {
+    creep.memory.source = getSource(creep);
+  }
+
+  if (!creep.memory.source) return;
+
+  if (Memory.roomData[creep.memory.room].bootstrap) {
+    bootstrap(creep);
+  } else if (creep.memory.tier === 0) {
+    bootstrap(creep);
+  } else {
+    if (Memory.roomData[creep.memory.room].lastBoostrap) {
+      creep.memory.source = getSource(creep);
+    }
+    nonBootstrap(creep);
+  }
+}
+
+function bootstrap(creep: Creep): void {
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const source = Game.getObjectById(creep.memory.source!);
+    if (!source) return;
+
+    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+      move(creep, source.pos, "#ff8800");
+    }
+  } else {
+    const targets = creep.room.find(FIND_STRUCTURES, {
+      filter: structure =>
+        (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) &&
+        structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+    });
+
+    if (targets.length > 0) {
+      if (creep.transfer(targets[0], RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+        move(creep, targets[0].pos, "#FFee00");
+      }
+    } else {
+      const dock = Game.flags["HARV-DOCK"];
+      if (dock && !creep.pos.isEqualTo(dock.pos)) {
+        move(creep, dock.pos, "#FF0000");
+      }
+    }
+  }
+}
+
+function nonBootstrap(creep: Creep): void {
+  if (creep.memory.source && !(creep.memory.tier === 0)) {
+    const source = Game.getObjectById(creep.memory.source);
+    if (!source) return;
+
+    const target = Memory.roomData[creep.memory.room].sources?.[creep.memory.source!]?.creeps[creep.name];
+
+    if (target) {
+      const targetPos = new RoomPosition(target.x, target.y, creep.memory.room);
+      if (!creep.pos.isEqualTo(targetPos)) {
+        move(creep, targetPos, "#ff0000");
+        return;
+      }
+
+      const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
+        filter: (structure): structure is StructureContainer =>
+          structure.structureType === STRUCTURE_CONTAINER && structure.pos.isEqualTo(targetPos)
+      });
+
+      if (containers.length === 0) return;
+
+      const miningPower = creep.getActiveBodyparts(WORK) * HARVEST_POWER;
+      const availableEnergy = Math.min(source.energy, miningPower);
+
+      if (containers[0].store.getFreeCapacity(RESOURCE_ENERGY) >= availableEnergy) {
+        creep.harvest(source);
+      }
+    } else {
+      creep.memory.source = getSource(creep);
+    }
+  }
+}
+
+
+
+============================================================
+FILE: src/roles/hauler.ts
+============================================================
+
+import { move } from "managers/moveManager";
+
+export function runHAUL(creep: Creep): void {
+  if (creep.memory.working && creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && (creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0 || checkContainers(creep))) {
+    creep.memory.working = true;
+  }
+
+  if (creep.memory.working) {
+    deliver(creep);
+  } else {
+    collect(creep);
+  }
+}
+
+function collect(creep: Creep): void {
+  const containers = creep.room.find(FIND_STRUCTURES, {
+    filter: (structure): structure is StructureContainer =>
+      structure.structureType === STRUCTURE_CONTAINER && structure.store.getUsedCapacity(RESOURCE_ENERGY) > 0
+  });
+
+  const tombstones = creep.room.find(FIND_TOMBSTONES, {
+    filter: tombstone => tombstone.store.getUsedCapacity(RESOURCE_ENERGY) > 0
+  });
+
+  const ruins = creep.room.find(FIND_RUINS, {
+    filter: ruin => ruin.store.getUsedCapacity(RESOURCE_ENERGY) > 0
+  });
+
+  if ((containers.length === 0) && (tombstones.length === 0) && (ruins.length === 0)) {
+    if (!Game.flags["HAUL-DOCK"]) return;
+    move(creep, Game.flags["HAUL-DOCK"].pos, "#ff0000");
+    return;
+  }
+
+  const selectedContainer = creep.pos.findClosestByPath(containers);
+  const selectedTombstone = creep.pos.findClosestByPath(tombstones);
+  const selectedRuin = creep.pos.findClosestByPath(ruins);
+
+  if (selectedTombstone) {
+    if (creep.withdraw(selectedTombstone, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      move(creep, selectedTombstone.pos, "#ff8800");
+    }
+  } else if (selectedRuin) {
+    if (creep.withdraw(selectedRuin, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      move(creep, selectedRuin.pos, "#ff8800");
+    }
+  } else if (selectedContainer) {
+    if (creep.withdraw(selectedContainer, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      move(creep, selectedContainer.pos, "#ff8800");
+    }
+  }
+}
+
+function deliver(creep: Creep): void {
+  const targets = creep.room.find(FIND_MY_STRUCTURES, {
+    filter: (structure): structure is StructureSpawn | StructureExtension =>
+      (structure.structureType === STRUCTURE_SPAWN || structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_STORAGE) &&
+      structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+  });
+
+  if (targets.length === 0) {
+    const dock = Game.flags["HAUL-DOCK"];
+
+    if (dock && !creep.pos.isEqualTo(dock.pos)) {
+      move(creep, dock.pos, "#ff0000");
+    }
+
+    return;
+  }
+
+  const target = creep.pos.findClosestByPath(targets);
+  if (!target) {
+    const flag = Game.flags["HAUL-DOCK"];
+    if (flag) {
+      move(creep, flag.pos, "#ff8800");
+    }
+    return;
+  };
+
+  const result = creep.transfer(target, RESOURCE_ENERGY);
+
+  if (result === ERR_NOT_IN_RANGE) {
+    move(creep, target.pos, "#ffee00");
+  }
+}
+
+function checkContainers(creep: Creep): boolean {
+  const containers = creep.room.find(FIND_STRUCTURES, {filter: structure => structure.structureType === STRUCTURE_CONTAINER && structure.store.getUsedCapacity(RESOURCE_ENERGY) > 0});
+  return containers.length === 0;
+}
+
+
+
+============================================================
+FILE: src/roles/retire.ts
+============================================================
+
+import { move } from "managers/moveManager";
+
+export function runRETIRE(creep: Creep): void {
+  const flag = Game.flags.RETIRE;
+
+  if (!flag) {
+    creep.suicide();
+    return;
+  }
+
+  if (creep.pos.isEqualTo(flag.pos)) {
+    creep.suicide();
+  } else {
+    move(creep, flag.pos, "#ff0000");
+  }
+}
+
+
+
+============================================================
+FILE: src/roles/upgrader.ts
+============================================================
+
+// roles/upgrader.ts
+
+import { move } from "managers/moveManager";
+import { getSource } from "managers/sourceManager";
+
+export function runUP(creep: Creep): void {
+  if (!creep.memory.source) {
+    creep.memory.source = getSource(creep);
+  }
+
+  if (!creep.memory.source) return;
+
+  if (Memory.roomData[creep.memory.room].bootstrap) {
+    bootstrap(creep);
+  } else {
+    nonBootstrap(creep);
+  }
+}
+
+function bootstrap(creep: Creep): void {
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const source = Game.getObjectById(creep.memory.source!);
+    if (!source) return;
+
+    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+      move(creep, source.pos, "#ff8800");
+    }
+  } else {
+    const controller = creep.room.controller;
+    if (!controller) return;
+
+    if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) {
+      move(creep, controller.pos, "#00ff94");
+    }
+  }
+}
+
+function nonBootstrap(creep: Creep): void {
+  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.working = false;
+  }
+
+  if (!creep.memory.working && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+    creep.memory.working = true;
+  }
+
+  if (!creep.memory.working) {
+    const containers = creep.room.find(FIND_STRUCTURES, {
+      filter: structure => structure.structureType === STRUCTURE_CONTAINER
+    });
+    if (containers.length === 0) return;
+
+    const container = containers.filter((container) => container.structureType === STRUCTURE_CONTAINER && container.store.getUsedCapacity(RESOURCE_ENERGY) > 0);
+
+    if (container.length === 0) return;
+
+    const target = creep.pos.findClosestByPath(container);
+
+    if (!target) return;
+
+    if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      move(creep, target.pos, "#ff8800");
+    }
+  } else {
+    const controller = creep.room.controller;
+    if (!controller) return;
+
+    if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) {
+      move(creep, controller.pos, "#00ff94");
+    }
+  }
+}
+
+
+
+============================================================
+FILE: src/utils/ErrorMapper.ts
+============================================================
+
+/* eslint-disable */
+import { SourceMapConsumer } from "source-map";
+
+export class ErrorMapper {
+  // Cache consumer
+  private static _consumer?: SourceMapConsumer;
+
+  public static get consumer(): SourceMapConsumer {
+    if (this._consumer == null) {
+      this._consumer = new SourceMapConsumer(require("main.js.map"));
+    }
+
+    return this._consumer;
+  }
+
+  // Cache previously mapped traces to improve performance
+  public static cache: { [key: string]: string } = {};
+
+  /**
+   * Generates a stack trace using a source map generate original symbol names.
+   *
+   * WARNING - EXTREMELY high CPU cost for first call after reset - >30 CPU! Use sparingly!
+   * (Consecutive calls after a reset are more reasonable, ~0.1 CPU/ea)
+   *
+   * @param {Error | string} error The error or original stack trace
+   * @returns {string} The source-mapped stack trace
+   */
+  public static sourceMappedStackTrace(error: Error | string): string {
+    const stack: string = error instanceof Error ? (error.stack as string) : error;
+    if (Object.prototype.hasOwnProperty.call(this.cache, stack)) {
+      return this.cache[stack];
+    }
+
+    // eslint-disable-next-line no-useless-escape
+    const re = /^\s+at\s+(.+?\s+)?\(?([0-z._\-\\\/]+):(\d+):(\d+)\)?$/gm;
+    let match: RegExpExecArray | null;
+    let outStack = error.toString();
+
+    while ((match = re.exec(stack))) {
+      if (match[2] === "main") {
+        const pos = this.consumer.originalPositionFor({
+          column: parseInt(match[4], 10),
+          line: parseInt(match[3], 10)
+        });
+
+        if (pos.line != null) {
+          if (pos.name) {
+            outStack += `\n    at ${pos.name} (${pos.source}:${pos.line}:${pos.column})`;
+          } else {
+            if (match[1]) {
+              // no original source file name known - use file name from given trace
+              outStack += `\n    at ${match[1]} (${pos.source}:${pos.line}:${pos.column})`;
+            } else {
+              // no original source file name known or in given trace - omit name
+              outStack += `\n    at ${pos.source}:${pos.line}:${pos.column}`;
+            }
+          }
+        } else {
+          // no known position
+          break;
+        }
+      } else {
+        // no more parseable lines
+        break;
+      }
+    }
+
+    this.cache[stack] = outStack;
+    return outStack;
+  }
+
+  public static wrapLoop(loop: () => void): () => void {
+    return () => {
+      try {
+        loop();
+      } catch (e) {
+        if (e instanceof Error) {
+          if ("sim" in Game.rooms) {
+            const message = `Source maps don't work in the simulator - displaying original error`;
+            console.log(`<span style='color:red'>${message}<br>${_.escape(e.stack)}</span>`);
+          } else {
+            console.log(`<span style='color:red'>${_.escape(this.sourceMappedStackTrace(e))}</span>`);
+          }
+        } else {
+          // can't handle it
+          throw e;
+        }
+      }
+    };
+  }
+}
+
+
+
+============================================================
+FILE: src/utils/creepData.ts
+============================================================
+
+// utils/creepData.ts
+
+export function updateCounts(): void {
+  for (const room of Object.keys(Memory.roomData)) {
+    Memory.roomData[room].creepsData.HARV.totalCount = countCreeps("HARV", room);
+    Memory.roomData[room].creepsData.UP.totalCount = countCreeps("UP", room);
+    Memory.roomData[room].creepsData.BILL.totalCount = countCreeps("BILL", room);
+    Memory.roomData[room].creepsData.HAUL.totalCount = countCreeps("HAUL", room);
+  }
+}
+
+export function checkRetire(creep: Creep): void {
+  if (creep.memory.role === "RETIRE") return;
+
+  const room = Memory.roomData[creep.memory.room];
+  if (!room) return;
+
+  if (room.bootstrap) {
+    if (creep.memory.tier !== 0 && creep.memory.role === "HARV") {
+      creep.memory.role = "RETIRE";
+    }
+    return;
+  }
+
+  if (creep.memory.role === "HARV") return;
+
+  const roleData = room.creepsData[creep.memory.role];
+  if (!roleData) return;
+
+  if (creep.memory.tier !== roleData.tier) {
+    creep.memory.role = "RETIRE";
+  }
+}
+
+
+export function updateCosts(): void {
+  for (const [role, tiers] of Object.entries(Memory.templates)) {
+    Memory.costs[role] ??= {};
+
+    for (const [tier, body] of Object.entries(tiers)) {
+      Memory.costs[role][Number(tier)] = calculateCost(body);
+    }
+  }
+}
+
+function calculateCost(body: BodyPartConstant[]): number {
+  return body.reduce((total, part) => total + BODYPART_COST[part], 0);
+}
+
+function countCreeps(role: string, room: string): number {
+  const bootstrap = Memory.roomData[room].bootstrap;
+
+  return Object.values(Game.creeps).filter(
+    creep =>
+      creep.memory.role === role &&
+      creep.memory.room === room &&
+      (bootstrap || creep.memory.tier > 0 || role === "HARV")
+  ).length;
+}
+
+

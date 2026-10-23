@@ -11,6 +11,7 @@
     "push-pserver": "rollup -c --environment DEST:pserver",
     "push-season": "rollup -c --environment DEST:season",
     "push-sim": "rollup -c --environment DEST:sim",
+    "push-test": "rollup -c --environment DEST:test",
     "test": "npm run test-unit",
     "test-unit": "mocha test/unit/**/*.ts",
     "test-integration": "echo 'See docs/in-depth/testing.md for instructions on enabling integration tests'",
@@ -18,6 +19,7 @@
     "watch-pserver": "rollup -cw --environment DEST:pserver",
     "watch-season": "rollup -cw --environment DEST:season",
     "watch-sim": "rollup -cw --environment DEST:sim",
+    "watch-test": "rollup -cw --environment DEST:test",
     "export-source": "node scripts/export-source.cjs"
   },
   "repository": {

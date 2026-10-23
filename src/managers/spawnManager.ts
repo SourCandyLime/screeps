@@ -1,17 +1,24 @@
 // managers/spawnManager.ts
 
-export function spawner(): void {
-  const spawn = Game.spawns[Memory.spawn];
+import { advanceCreepName, getCreepName } from "./nameManager";
 
-  if (!spawn || spawn.spawning) return;
+export function runSpawners(): void {
+  for (const room of Object.keys(Memory.roomData)) {
+    const spawn = Game.spawns[Memory.roomData[room].spawns[0]];
 
-  for (const role of Memory.priorities) {
-    if (attemptSpawn(spawn, role)) return;
+    if (!spawn || spawn.spawning) continue;
+
+    for (const role of Memory.priorities) {
+      if (attemptSpawn(spawn, role)) {
+        advanceCreepName(role);
+        break;
+      }
+    }
   }
 }
 
 function attemptSpawn(spawn: StructureSpawn, role: string): boolean {
-  if (Memory.creepsRoleData[role].targetCount <= Memory.creepsRoleData[role].total) {
+  if (Memory.roomData[spawn.room.name].creepsData[role].targetCount <= Memory.roomData[spawn.room.name].creepsData[role].totalCount) {
     return false;
   }
 
@@ -25,8 +32,7 @@ function attemptSpawn(spawn: StructureSpawn, role: string): boolean {
 }
 
 function spawnROLE(spawn: StructureSpawn, role: string): ScreepsReturnCode {
-  const tier = Memory.creepsRoleData[role].tier;
-
+  const tier = Memory.roomData[spawn.room.name].creepsData[role].tier;
   const body = Memory.templates[role]?.[tier];
 
   if (!body) {
@@ -34,7 +40,9 @@ function spawnROLE(spawn: StructureSpawn, role: string): ScreepsReturnCode {
     return ERR_INVALID_ARGS;
   }
 
-  return spawn.spawnCreep(body, role + Game.time.toString(), {
+  const name = getCreepName(role);
+
+  return spawn.spawnCreep(body, "T" + String(tier) + " " + name, {
     memory: { role, room: spawn.room.name, working: false, tier }
   });
 

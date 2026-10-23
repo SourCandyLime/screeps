@@ -1,11 +1,16 @@
 // main.ts
 
 import { ErrorMapper } from "utils/ErrorMapper";
-import { updateCount, updateCosts } from "utils/creepData";
-import { spawner } from "managers/spawnManager";
+import { updateCounts, updateCosts, checkRetire } from "utils/creepData";
+import { runSpawners } from "managers/spawnManager";
+import { bootstrapManager } from "managers/bootstrapManager";
 import { runHARV } from "roles/harvester";
-import { runBILL } from "./roles/builder";
-import { runUP } from "./roles/upgrader";
+import { runBILL } from "roles/builder";
+import { runUP } from "roles/upgrader";
+import { runRETIRE } from "roles/retire";
+import { updateTargetCounts } from "managers/countManager";
+import { runHAUL } from "roles/hauler";
+import { updateTiers } from "managers/tierManager";
 
 declare global {
   /*
@@ -20,13 +25,13 @@ declare global {
   interface Memory {
     uuid: number;
     log: any;
-    bootstrap: boolean;
-    creepsRoleData: Record<string, Record<string, number>>;
     templates: Record<string, Record<number, BodyPartConstant[]>>;
     costs: Record<string, Record<number, number>>;
     spawn: string;
     lastTemplates?: string;
     priorities: string[];
+    roomData: Record<string, RoomData>;
+    nameCounters: Record<string, number>;
   }
 
   interface CreepMemory {
@@ -35,6 +40,33 @@ declare global {
     working: boolean;
     tier: number;
     source?: Id<Source>;
+  }
+
+  interface RoomData {
+    bootstrap: boolean;
+    creepsData: Record<string, CreepsData>;
+    spawns: string[];
+    sources?: Record<Id<Source>, sourceData>;
+    lastBoostrap: boolean;
+  }
+
+  interface sourceData {
+    tiles: tile[];
+    openSpace: boolean;
+    openTiles: tile[];
+    creeps: Record<string, tile>;
+  }
+
+  interface tile {
+    x: number;
+    y: number;
+    type: number;
+  }
+
+  interface CreepsData {
+    targetCount: number;
+    totalCount: number;
+    tier: number;
   }
 
 }
@@ -46,52 +78,77 @@ declare const global: {
 // When compiling TS to JS and bundling with rollup, the line numbers and file names in error messages change
 // This utility uses source maps to get the line numbers and file names of the original, TS source code
 
-Memory.creepsRoleData ??= {
-  HARV: { targetCount: 1, total: 0, tier: 0 },
-  UP: { targetCount: 1, total: 0, tier: 0 },
-  BILL: { targetCount: 0, total: 0, tier: 0 },
-  HAUL: { targetCount: 0, total: 0, tier: 0 },
-};
-
 Memory.templates ??= {
   HARV: {
-    0: [MOVE, CARRY, WORK],
-    1: [MOVE, WORK, WORK]
+    0: [MOVE, CARRY, WORK, WORK],
+    1: [MOVE, WORK, WORK, WORK, WORK, WORK],
   },
   UP: {
-    0: [MOVE, CARRY, WORK],
-    1: [MOVE, MOVE, CARRY, WORK]
+    0: [MOVE, MOVE, CARRY, WORK],
+    1: [MOVE, MOVE, CARRY, CARRY, CARRY, WORK, WORK, WORK],
   },
   BILL: {
-    0: [MOVE, CARRY, WORK],
-    1: [MOVE, MOVE, CARRY, WORK]
+    0: [MOVE, CARRY, WORK, WORK],
+    1: [MOVE, MOVE, CARRY, CARRY, CARRY, WORK, WORK, WORK],
   },
   HAUL: {
-    0: [MOVE, MOVE, CARRY, CARRY],
-    1: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY]
+    0: [MOVE, MOVE, MOVE, CARRY, CARRY, CARRY],
+    1: [MOVE, MOVE, MOVE, MOVE, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY]
   }
 };
 
 Memory.costs ??= {};
 
-Memory.spawn ??= "S1";
-
-Memory.bootstrap ??= true;
+Memory.roomData ??= {
+  W6S28: {
+    bootstrap: true,
+    creepsData: {
+      HARV: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      UP: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      BILL: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      },
+      HAUL: {
+        targetCount: 1,
+        totalCount: 0,
+        tier: 0
+      }
+    },
+    spawns: ["S1"],
+    lastBoostrap: true,
+  }
+};
 
 Memory.priorities ??= ["HARV", "UP", "BILL", "HAUL"];
+
 
 
 export const loop = ErrorMapper.wrapLoop(() => {
   console.log(`Current game tick is ${Game.time}`);
 
-  // Automatically delete memory of missing creeps
+  // Get names of creeps currently spawning
+  const spawningNames = new Set(
+    Object.values(Game.spawns)
+      .filter(spawn => spawn.spawning !== null)
+      .map(spawn => spawn.spawning!.name)
+  );
+
+  // Delete memory only for genuinely missing creeps
   for (const name in Memory.creeps) {
-    if (!(name in Game.creeps)) {
+    if (!(name in Game.creeps) && !(spawningNames.has(name))) {
       delete Memory.creeps[name];
     }
   }
-
-  updateCount();
 
   const currentTemplates = JSON.stringify(Memory.templates);
 
@@ -100,17 +157,40 @@ export const loop = ErrorMapper.wrapLoop(() => {
     Memory.lastTemplates = currentTemplates;
   }
 
-  spawner();
+  bootstrapManager();
+  updateCounts();
+  updateTiers();
 
   for (const creep of Object.values(Game.creeps)) {
+    checkRetire(creep);
+  }
+
+  updateCounts();
+  updateTargetCounts();
+  runSpawners();
+
+  for (const creep of Object.values(Game.creeps)) {
+    if (!creep.memory.role) {
+      creep.suicide();
+    }
+
     if (creep.memory.role === "HARV") {
       runHARV(creep);
     } else if (creep.memory.role === "UP") {
       runUP(creep);
     } else if (creep.memory.role === "BILL") {
       runBILL(creep);
+    } else if (creep.memory.role === "HAUL") {
+      runHAUL(creep);
+    } else if (creep.memory.role === "RETIRE") {
+      runRETIRE(creep);
     }
   }
 
+  for (const room of Object.values(Memory.roomData)) {
+    if (room.bootstrap !== room.lastBoostrap) {
+      room.lastBoostrap = room.bootstrap;
+    }
+  }
 });
 
